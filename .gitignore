@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+data/*.csv
+data/*.parquet
+models/*.joblib
+models/*.json
+models/*.csv
+models/*.png
+audit.db
+.env
+.pytest_cache/
+*.egg-info/
