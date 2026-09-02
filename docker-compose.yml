@@ -1,0 +1,22 @@
+services:
+  api:
+    build: .
+    command: uvicorn riskops.api:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+      - ./audit.db:/app/audit.db
+
+  ui:
+    build: .
+    command: streamlit run app_streamlit.py --server.address 0.0.0.0 --server.port 8501
+    ports:
+      - "8501:8501"
+    environment:
+      - API_URL=http://api:8000
+    depends_on:
+      - api
