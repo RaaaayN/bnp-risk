@@ -13,6 +13,25 @@ Ce README couvre l'usage (quickstart, tests, résultats). Pour le raisonnement
 derrière chaque choix — enjeux métier, arbitrages techniques, alternatives
 écartées et pourquoi — voir [docs/CONCEPTION.md](docs/CONCEPTION.md).
 
+## Démonstration
+
+UI analyste (Streamlit) : file d'alertes triée par score, score ML et seuil
+courant, facteurs explicatifs SHAP transaction par transaction, historique du
+compte, décision avec justification obligatoire et journal d'audit des
+décisions déjà prises.
+
+![Vue d'ensemble de l'UI analyste : file d'alertes, score, facteurs SHAP et décision](docs/screenshots/ui_overview.png)
+
+Synthèse LLM structurée (résumé, signaux d'alerte, action recommandée) sous
+les facteurs SHAP, et journal d'audit des décisions passées :
+
+![Synthèse LLM d'investigation et journal d'audit](docs/screenshots/ui_llm_synthesis.png)
+
+Documentation interactive de l'API FastAPI (`/docs`) : file d'alertes, détail
+explicable, enregistrement de décision, consultation de l'audit :
+
+![Documentation Swagger de l'API FastAPI](docs/screenshots/api_docs.png)
+
 ## Données
 
 Le [dataset IBM AML](https://www.kaggle.com/datasets/ealtman2019/ibm-transactions-for-anti-money-laundering-aml)
