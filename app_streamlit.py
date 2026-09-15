@@ -7,8 +7,8 @@ import streamlit as st
 
 API_URL = os.environ.get("API_URL", "http://localhost:8000")
 
-st.set_page_config(page_title="RiskOps Copilot", layout="wide")
-st.title("RiskOps Copilot — Triage d'alertes AML")
+st.set_page_config(page_title="Triage d'alertes AML", layout="wide")
+st.title("Triage d'alertes AML")
 
 with st.sidebar:
     st.subheader("File d'alertes prioritaires")

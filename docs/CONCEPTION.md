@@ -1,9 +1,8 @@
-# Note de conception — RiskOps Copilot
+# Note de conception
 
-Ce document explique **pourquoi** le système est construit comme il l'est : les
-enjeux métier et techniques qui contraignent les choix, les alternatives
-écartées, et les limites assumées. Le [README](../README.md) répond à
-« comment l'utiliser » ; ce document répond à « pourquoi c'est fait ainsi ».
+Le README dit comment utiliser le projet. Ce document dit pourquoi il est
+construit comme ça : les contraintes métier et techniques qui ont pesé sur
+chaque choix, ce qui a été écarté et pourquoi, et les limites qu'on assume.
 
 ## 1. Le problème que le système doit réellement résoudre
 
@@ -25,18 +24,16 @@ classe correctement le haut du classement** (les N transactions les plus
 suspectes, N = capacité analyste), et qui rend chaque décision **contestable
 et traçable** plutôt qu'opaque.
 
-Trois contraintes non négociables en découlent, posées par le contexte
-bancaire/réglementaire plus que par la donnée elle-même :
-
-1. **Explicabilité** : un analyste (et un régulateur, a posteriori) doit
-   pouvoir comprendre pourquoi une transaction a été remontée.
-2. **Contrôle humain** : le modèle priorise, il ne décide jamais seul —
-   toute action (Clear/Investigate/Escalate) doit être un acte humain
-   justifié.
-3. **Traçabilité** : chaque décision doit être journalisée avec le contexte
-   qui l'a produite (version du modèle, seuil, score, données vues), pour
-   pouvoir répondre a posteriori à « pourquoi a-t-on laissé passer / bloqué
-   cette transaction ? ».
+De là découlent trois contraintes non négociables, posées par le contexte
+bancaire/réglementaire plus que par la donnée elle-même. D'abord
+l'explicabilité : un analyste, et un régulateur a posteriori, doit pouvoir
+comprendre pourquoi une transaction a été remontée. Ensuite le contrôle
+humain : le modèle priorise, il ne décide jamais seul, toute action
+(Clear/Investigate/Escalate) reste un acte humain justifié. Et enfin la
+traçabilité : chaque décision est journalisée avec le contexte qui l'a
+produite (version du modèle, seuil, score, données vues), pour pouvoir
+répondre après coup à "pourquoi a-t-on laissé passer / bloqué cette
+transaction ?".
 
 ## 2. Enjeux techniques et comment ils ont façonné le pipeline
 
@@ -116,29 +113,26 @@ qu'il se traduit directement en charge analyste économisée.
 Deux risques spécifiques aux LLM dans un contexte de décision réglementée :
 l'hallucination (inventer un fait absent du contexte) et la sortie non
 structurée (impossible à valider ou à afficher de façon fiable dans l'UI).
-Conséquences de conception dans
+Ça se traduit concrètement dans
 [`llm_summary.py`](../src/riskops/llm_summary.py) et
-[`schemas.py`](../src/riskops/schemas.py) :
+[`schemas.py`](../src/riskops/schemas.py) par quatre garde-fous.
 
-- **Schéma Pydantic forcé** (`LLMSynthesis`) : le prompt système exige un
-  JSON conforme à un schéma précis, et toute sortie qui ne valide pas contre
-  ce schéma est rejetée (`ValidationError` → fallback), jamais affichée
-  telle quelle. On ne fait jamais confiance à du texte libre.
-- **Contexte fourni au LLM = uniquement les facteurs SHAP déjà calculés**, pas
-  la transaction brute ni une invitation à « analyser » — le LLM synthétise
-  une explication déjà produite statistiquement, il n'en invente pas une.
-- **Fallback déterministe sans clé API** : le système fonctionne à l'identique
-  (mêmes endpoints, même schéma de sortie) sans `ANTHROPIC_API_KEY`, avec une
-  synthèse template basée directement sur les facteurs SHAP. Ce n'est pas
-  qu'une commodité de démo : ça garantit que la disponibilité du système de
-  triage ne dépend jamais de la disponibilité d'un fournisseur LLM externe —
-  un système de contrôle des risques qui tombe en panne parce qu'une API tierce
-  est indisponible est un risque opérationnel en soi.
-- **La synthèse LLM n'apparaît jamais seule** : elle est toujours affichée à
-  côté des facteurs SHAP bruts dans l'UI, et la décision + justification
-  reste un champ texte rempli par l'analyste, jamais pré-rempli par le LLM.
-  Le workflow ne permet pas de valider une décision sans justification humaine
-  d'au moins 10 caractères, LLM ou pas (`DecisionRequest` dans `schemas.py`).
+Le schéma Pydantic est forcé (`LLMSynthesis`) : le prompt système exige un
+JSON conforme, et toute sortie qui ne valide pas est rejetée
+(`ValidationError` → fallback) plutôt qu'affichée telle quelle. On ne fait
+jamais confiance à du texte libre. Le contexte donné au LLM se limite aux
+facteurs SHAP déjà calculés, jamais la transaction brute ni une invitation à
+"analyser" — il reformule une explication déjà produite statistiquement, il
+n'en invente pas une nouvelle. Sans clé API, un fallback déterministe prend
+le relais : mêmes endpoints, même schéma de sortie, une synthèse construite
+directement à partir des facteurs SHAP. Ce n'est pas qu'une commodité de
+démo, ça évite qu'un système de contrôle des risques tombe en panne parce
+qu'un fournisseur LLM externe est indisponible. Et la synthèse n'apparaît
+jamais seule : elle reste à côté des facteurs SHAP bruts dans l'UI, la
+décision et sa justification restent un champ texte rempli par l'analyste,
+jamais pré-rempli par le LLM — impossible de valider une décision sans au
+moins 10 caractères de justification humaine (`DecisionRequest` dans
+`schemas.py`).
 
 ### 2.6 Journal d'audit : SQLite, pas de service externe
 
