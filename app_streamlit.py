@@ -58,7 +58,10 @@ with col1:
         st.info(s["summary"])
         st.write("Signaux d'alerte:", ", ".join(s["key_red_flags"]))
         st.write(s["risk_narrative"])
-        st.caption(f"Action recommandee: {s['recommended_action']} (confiance: {s['confidence']})")
+        st.caption(
+            f"Orientation non contraignante: {s['recommended_action']} "
+            f"(confiance: {s['confidence']}, source: {s['synthesis_source']})"
+        )
 
 with col2:
     st.subheader("Decision analyste")

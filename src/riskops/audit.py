@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
     features_json TEXT NOT NULL,
     shap_top_factors_json TEXT NOT NULL,
     llm_summary_json TEXT,
+    synthesis_source TEXT CHECK(synthesis_source IN ('llm', 'fallback') OR synthesis_source IS NULL),
     decision TEXT NOT NULL,
     justification TEXT NOT NULL,
     decision_by TEXT NOT NULL,
@@ -33,6 +34,9 @@ def get_connection(db_path: pathlib.Path = DB_PATH) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute(SCHEMA)
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(audit_log)")}
+    if "synthesis_source" not in columns:
+        conn.execute("ALTER TABLE audit_log ADD COLUMN synthesis_source TEXT")
     return conn
 
 
@@ -54,16 +58,19 @@ def record_decision(
         raise ValueError(f"Decision invalide: {decision}. Attendu: {VALID_DECISIONS}")
     if not justification or not justification.strip():
         raise ValueError("La justification est obligatoire pour toute decision.")
+    synthesis_source = llm_summary.get("synthesis_source") if llm_summary else None
 
     cur = conn.execute(
         """INSERT INTO audit_log
         (transaction_id, model_name, model_version, threshold, score, features_json,
-         shap_top_factors_json, llm_summary_json, decision, justification, decision_by, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+         shap_top_factors_json, llm_summary_json, synthesis_source, decision, justification,
+         decision_by, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             transaction_id, model_name, model_version, threshold, score,
             json.dumps(features), json.dumps(shap_top_factors),
             json.dumps(llm_summary) if llm_summary else None,
+            synthesis_source,
             decision, justification.strip(), decision_by,
             datetime.datetime.now(datetime.UTC).isoformat(),
         ),

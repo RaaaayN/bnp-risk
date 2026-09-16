@@ -101,18 +101,19 @@ par une méthode auditable, plutôt qu'à en inventer une.
 
 La régression logistique est la baseline de référence. Le champion est choisi
 sur le PR-AUC de validation, avant toute consultation du test : XGBoost obtient
-ici 0.319 contre 0.265, puis 0.556 contre 0.301 sur le test final. À recall
-voisin de 50%, il génère 58 alertes contre 71 pour la baseline, soit 29% de
-faux positifs en moins.
+ici 0.334 contre 0.265, puis 0.357 contre 0.301 sur le test final. La validation
+sert également à l'early stopping de XGBoost (`early_stopping_rounds=30`) ; le
+modèle s'arrête ici à l'itération 61 au lieu d'utiliser arbitrairement tous les
+arbres disponibles.
 
 Le test ne contient toutefois que 51 positifs. Un bootstrap par compte — et
 non par ligne, car les transactions d'un épisode sont dépendantes — donne un
-IC 95% de [-0.106 ; 0.543] pour la différence de PR-AUC. L'intervalle contient
+IC 95% de [-0.251 ; 0.315] pour la différence de PR-AUC. L'intervalle contient
 zéro : XGBoost est le champion défini par la validation, mais ce petit jeu ne
 permet pas d'affirmer que sa supériorité est statistiquement établie.
 
 Une ablation entraîne aussi le même XGBoost sans aucune caractéristique
-d'historique. Son PR-AUC tombe de 0.556 à 0.196. Ce contrôle démontre que le
+d'historique. Son PR-AUC tombe de 0.357 à 0.178. Ce contrôle démontre que le
 gain ne vient pas uniquement du montant ou du format de la transaction
 courante et que les fenêtres comportementales ont effectivement un signal à
 apprendre.
@@ -130,9 +131,10 @@ Le schéma Pydantic est forcé (`LLMSynthesis`) : le prompt système exige un
 JSON conforme, et toute sortie qui ne valide pas est rejetée
 (`ValidationError` → fallback) plutôt qu'affichée telle quelle. On ne fait
 jamais confiance à du texte libre. Le contexte donné au LLM se limite aux
-facteurs SHAP déjà calculés, jamais la transaction brute ni une invitation à
-"analyser" — il reformule une explication déjà produite statistiquement, il
-n'en invente pas une nouvelle. Sans clé API, un fallback déterministe prend
+facteurs SHAP déjà calculés, jamais la transaction brute. Il reformule une
+explication déjà produite statistiquement et propose un `recommended_action`
+explicitement présenté comme une orientation non contraignante. Sans clé API,
+un fallback déterministe prend
 le relais : mêmes endpoints, même schéma de sortie, une synthèse construite
 directement à partir des facteurs SHAP. Ce n'est pas qu'une commodité de
 démo, ça évite qu'un système de contrôle des risques tombe en panne parce
@@ -163,10 +165,11 @@ choisi pour maximiser le F1-score ou un point arbitraire de la courbe
 precision/recall ignore la vraie contrainte : le nombre de dossiers qu'une
 équipe peut traiter par jour. `threshold_for_budget` et
 `business_case_sweep` ([`evaluate.py`](../src/riskops/evaluate.py)) inversent
-le problème : on part de la capacité (20/jour), on en déduit le seuil, puis
-on mesure le recall obtenu. C'est ce calcul qui répond à la question posée en
-introduction du projet — voir la section *Business case* du README pour les
-chiffres et leur lecture.
+le problème : on part de la capacité (20/jour), on calibre le seuil sur la
+validation, puis on le fige avant de mesurer volume, précision et rappel sur le
+test. Le test ne sert donc jamais à choisir le point de fonctionnement. C'est
+ce calcul qui répond à la question posée en introduction du projet — voir la
+section *Business case* du README pour les chiffres et leur lecture.
 
 ## 3. Ce qui a été délibérément exclu, et pourquoi
 
@@ -179,8 +182,8 @@ Le README le mentionne déjà brièvement ; voici le raisonnement complet.
   gain qui n'est pas démontrable sur 4 jours ni nécessaire pour illustrer les
   compétences visées (triage explicable, pas détection de réseaux).
 - **Pas de LangGraph / orchestration d'agents** : il n'y a ici qu'un seul
-  appel LLM avec un rôle strictement borné (reformuler des facteurs SHAP déjà
-  calculés en résumé lisible). Une orchestration multi-agents résoudrait un
+  appel LLM avec un rôle strictement borné (résumer des facteurs SHAP et
+  suggérer une orientation non contraignante). Une orchestration multi-agents résoudrait un
   problème qui n'existe pas dans ce système et ajouterait une source de
   panne et de non-déterminisme supplémentaire dans un contexte où la
   fiabilité prime.
@@ -208,9 +211,10 @@ Le README le mentionne déjà brièvement ; voici le raisonnement complet.
   contrôles négatifs difficiles, mais restent plus simples que des schémas
   réels multi-sauts. Les métriques valident le pipeline et l'utilité de ses
   features sur le mécanisme simulé, pas une performance absolue en banque.
-- Le seuil de production est recalculé sur la période de test uniquement ;
-  en usage réel il faudrait le réviser périodiquement à mesure que le volume
-  de transactions et le taux de blanchiment évoluent.
+- Le seuil de démonstration est calibré une fois sur la validation puis figé
+  sur le test. En usage réel il faudrait le réviser périodiquement sur une
+  fenêtre de calibration arrivée à maturité, jamais sur la période servant au
+  reporting final.
 - La synthèse LLM, même contrainte par schéma, reste un résumé et non une
   preuve : elle est explicitement positionnée comme aide à la lecture, jamais
   comme justification suffisante d'une décision (voir §2.5).

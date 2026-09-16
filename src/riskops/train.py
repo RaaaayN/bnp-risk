@@ -12,8 +12,13 @@ from sklearn.preprocessing import StandardScaler
 from xgboost import XGBClassifier
 
 from riskops.evaluate import (
-    alerts_per_10k, bootstrap_pr_auc_comparison, business_case_sweep, false_positive_reduction_at_equal_recall,
-    pr_auc, precision_at_k, recall_at_budget,
+    alerts_per_10k,
+    bootstrap_pr_auc_comparison,
+    business_case_sweep,
+    false_positive_reduction_at_equal_recall,
+    metrics_at_threshold,
+    pr_auc,
+    threshold_for_budget,
 )
 from riskops.features import FEATURE_COLUMNS, TRANSACTION_FEATURE_COLUMNS
 
@@ -24,11 +29,16 @@ DAILY_INVESTIGATION_CAPACITY = 20
 
 def _new_xgboost(pos_weight: float) -> XGBClassifier:
     return XGBClassifier(
-        n_estimators=300, max_depth=5, learning_rate=0.05,
+        n_estimators=1000, max_depth=5, learning_rate=0.05,
         subsample=0.8, colsample_bytree=0.8,
         scale_pos_weight=pos_weight, eval_metric="aucpr",
-        random_state=42,
+        early_stopping_rounds=30, random_state=42, n_jobs=1,
     )
+
+
+def _period_days(df: pd.DataFrame) -> int:
+    duration = df["Timestamp"].max() - df["Timestamp"].min()
+    return max(int(np.ceil(duration.total_seconds() / 86_400)), 1)
 
 
 def chronological_split(df: pd.DataFrame, train_frac=0.7, val_frac=0.15):
@@ -49,7 +59,8 @@ def main():
     X_val, y_val = val_df[FEATURE_COLUMNS], val_df["Is Laundering"]
     X_test, y_test = test_df[FEATURE_COLUMNS], test_df["Is Laundering"]
 
-    n_days_test = max((test_df["Timestamp"].max() - test_df["Timestamp"].min()).days, 1)
+    n_days_val = _period_days(val_df)
+    n_days_test = _period_days(test_df)
 
     # --- Baseline: Logistic Regression ---
     scaler = StandardScaler().fit(X_train)
@@ -86,24 +97,44 @@ def main():
         y_test, lr_test_scores, xgb_test_scores, test_df["Account"]
     )
     selected_model = "xgboost" if xgboost_val_pr_auc >= logreg_val_pr_auc else "logreg"
+    lr_threshold = threshold_for_budget(
+        lr_val_scores, DAILY_INVESTIGATION_CAPACITY, n_days_val
+    )
+    xgb_threshold = threshold_for_budget(
+        xgb_val_scores, DAILY_INVESTIGATION_CAPACITY, n_days_val
+    )
+    lr_operating = metrics_at_threshold(y_test, lr_test_scores, lr_threshold, n_days_test)
+    xgb_operating = metrics_at_threshold(y_test, xgb_test_scores, xgb_threshold, n_days_test)
 
-    budget = DAILY_INVESTIGATION_CAPACITY * n_days_test
     metrics = {
+        "seed": 42,
+        "n_days_validation": n_days_val,
         "n_days_test": n_days_test,
+        "threshold_calibration": {
+            "dataset": "validation",
+            "daily_capacity": DAILY_INVESTIGATION_CAPACITY,
+        },
         "logreg": {
             "validation_pr_auc": logreg_val_pr_auc,
-            "pr_auc": logreg_pr_auc,
-            "pr_auc_95pct_ci": uncertainty["model_a_95pct_ci"],
-            "precision_at_budget": precision_at_k(y_test, lr_test_scores, budget),
-            "recall_at_budget": recall_at_budget(y_test, lr_test_scores, budget),
+            "test_pr_auc": logreg_pr_auc,
+            "test_pr_auc_95pct_ci": uncertainty["model_a_95pct_ci"],
+            "validation_calibrated_threshold": lr_threshold,
+            "test_alerts": lr_operating["alerts"],
+            "test_alerts_per_day": lr_operating["alerts_per_day"],
+            "test_precision_at_fixed_threshold": lr_operating["precision"],
+            "test_recall_at_fixed_threshold": lr_operating["recall"],
             "alerts_per_10k_at_p99": alerts_per_10k(lr_test_scores, np.quantile(lr_test_scores, 0.99)),
         },
         "xgboost": {
             "validation_pr_auc": xgboost_val_pr_auc,
-            "pr_auc": xgboost_pr_auc,
-            "pr_auc_95pct_ci": uncertainty["model_b_95pct_ci"],
-            "precision_at_budget": precision_at_k(y_test, xgb_test_scores, budget),
-            "recall_at_budget": recall_at_budget(y_test, xgb_test_scores, budget),
+            "best_iteration": xgb.best_iteration,
+            "test_pr_auc": xgboost_pr_auc,
+            "test_pr_auc_95pct_ci": uncertainty["model_b_95pct_ci"],
+            "validation_calibrated_threshold": xgb_threshold,
+            "test_alerts": xgb_operating["alerts"],
+            "test_alerts_per_day": xgb_operating["alerts_per_day"],
+            "test_precision_at_fixed_threshold": xgb_operating["precision"],
+            "test_recall_at_fixed_threshold": xgb_operating["recall"],
             "alerts_per_10k_at_p99": alerts_per_10k(xgb_test_scores, np.quantile(xgb_test_scores, 0.99)),
         },
         "xgboost_transaction_only_ablation": {
@@ -121,20 +152,27 @@ def main():
         ),
     }
 
-    champion_scores = xgb_test_scores if selected_model == "xgboost" else lr_test_scores
-    business_case = business_case_sweep(y_test, champion_scores, n_days_test)
+    champion_val_scores = xgb_val_scores if selected_model == "xgboost" else lr_val_scores
+    champion_test_scores = xgb_test_scores if selected_model == "xgboost" else lr_test_scores
+    champion_threshold = xgb_threshold if selected_model == "xgboost" else lr_threshold
+    business_case = business_case_sweep(
+        champion_val_scores, n_days_val, y_test, champion_test_scores, n_days_test
+    )
+    metrics["business_case"] = business_case.to_dict(orient="records")
 
     # --- SHAP sur le champion sélectionné en validation ---
     xgb_explainer = shap.TreeExplainer(xgb)
     if selected_model == "xgboost":
         champion_bundle = {
-            "model": xgb, "scaler": None, "features": FEATURE_COLUMNS, "model_name": "xgboost"
+            "model": xgb, "scaler": None, "features": FEATURE_COLUMNS,
+            "model_name": "xgboost", "threshold": champion_threshold,
         }
         champion_explainer = xgb_explainer
         shap_values = champion_explainer.shap_values(X_test)
     else:
         champion_bundle = {
-            "model": lr, "scaler": scaler, "features": FEATURE_COLUMNS, "model_name": "logreg"
+            "model": lr, "scaler": scaler, "features": FEATURE_COLUMNS,
+            "model_name": "logreg", "threshold": champion_threshold,
         }
         champion_explainer = shap.LinearExplainer(lr, scaler.transform(X_train))
         shap_values = champion_explainer.shap_values(scaler.transform(X_test))

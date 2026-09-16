@@ -2,7 +2,7 @@
 tres rare, l'accuracy serait proche de 100% meme pour un modele inutile)."""
 import numpy as np
 import pandas as pd
-from sklearn.metrics import average_precision_score, precision_recall_curve
+from sklearn.metrics import average_precision_score
 
 
 def pr_auc(y_true, y_score) -> float:
@@ -80,7 +80,7 @@ def alerts_per_10k(y_score, threshold: float) -> float:
 
 def threshold_for_budget(y_score, daily_budget: int, n_days: int) -> float:
     """Seuil qui produit en moyenne `daily_budget` alertes/jour sur la periode
-    de test (approx: budget total / volume total)."""
+    de calibration (approx: budget total / volume total)."""
     y_score = np.asarray(y_score)
     total_budget = daily_budget * n_days
     total_budget = min(total_budget, len(y_score))
@@ -90,46 +90,79 @@ def threshold_for_budget(y_score, daily_budget: int, n_days: int) -> float:
     return float(sorted_scores[total_budget - 1])
 
 
-def business_case_sweep(y_true, y_score, n_days: int, capacities=(5, 10, 20, 50, 100)) -> pd.DataFrame:
-    """Pour chaque capacite d'investigation quotidienne, calcule le seuil
-    correspondant, le rappel obtenu et le nombre d'alertes/jour."""
-    rows = []
+def metrics_at_threshold(y_true, y_score, threshold: float, n_days: int) -> dict:
+    """Mesure un seuil déjà fixé, sans réordonner ni recalibrer l'évaluation."""
     y_true = np.asarray(y_true)
-    total_positives = int(y_true.sum())
+    selected = np.asarray(y_score) >= threshold
+    alerts = int(selected.sum())
+    true_positives = int(y_true[selected].sum())
+    positives = int(y_true.sum())
+    return {
+        "alerts": alerts,
+        "alerts_per_day": alerts / n_days,
+        "precision": true_positives / alerts if alerts else 0.0,
+        "recall": true_positives / positives if positives else 0.0,
+        "positives_caught": true_positives,
+        "total_positives": positives,
+    }
+
+
+def business_case_sweep(
+    calibration_scores,
+    calibration_n_days: int,
+    evaluation_y,
+    evaluation_scores,
+    evaluation_n_days: int,
+    capacities=(5, 10, 20, 50, 100),
+) -> pd.DataFrame:
+    """Calibre chaque seuil sur validation, puis l'évalue tel quel sur test."""
+    rows = []
     for cap in capacities:
-        thr = threshold_for_budget(y_score, cap, n_days)
-        recall = recall_at_budget(y_true, y_score, cap * n_days)
-        precision = precision_at_k(y_true, y_score, cap * n_days)
+        threshold = threshold_for_budget(calibration_scores, cap, calibration_n_days)
+        observed = metrics_at_threshold(
+            evaluation_y, evaluation_scores, threshold, evaluation_n_days
+        )
         rows.append({
             "daily_capacity": cap,
-            "threshold": round(thr, 4),
-            "alerts_per_day": cap,
-            "recall": round(recall, 4),
-            "precision": round(precision, 4),
-            "positives_caught": round(recall * total_positives),
-            "total_positives": total_positives,
+            "threshold": round(threshold, 6),
+            "test_alerts": observed["alerts"],
+            "test_alerts_per_day": round(observed["alerts_per_day"], 2),
+            "test_recall": round(observed["recall"], 4),
+            "test_precision": round(observed["precision"], 4),
+            "test_positives_caught": observed["positives_caught"],
+            "test_total_positives": observed["total_positives"],
         })
     return pd.DataFrame(rows)
 
 
 def false_positive_reduction_at_equal_recall(y_true, score_a, score_b, target_recall: float) -> dict:
-    """Compare deux modeles (ex: LogReg vs XGBoost): a rappel egal, combien
-    d'alertes (faux positifs) chacun genere-t-il ?"""
+    """Compare le nombre d'alertes requis pour capturer exactement N positifs.
+
+    N est commun aux deux modèles et dérivé du rappel cible. On évite ainsi de
+    comparer deux points de courbe dont les rappels réalisés sont différents.
+    """
     y_true = np.asarray(y_true)
+    total_positives = int(y_true.sum())
+    if total_positives == 0:
+        raise ValueError("La comparaison requiert au moins un cas positif")
+    target_positives = min(max(int(np.ceil(target_recall * total_positives)), 1), total_positives)
 
-    def alerts_for_recall(score):
-        precision, recall, thresh = precision_recall_curve(y_true, score)
-        idx = np.argmin(np.abs(recall - target_recall))
-        thr = thresh[max(idx - 1, 0)] if idx > 0 else 0.0
-        n_alerts = int((np.asarray(score) >= thr).sum())
-        n_fp = n_alerts - int(y_true.sum() * recall[idx])
-        return n_alerts, max(n_fp, 0), float(recall[idx])
+    def alerts_to_capture_n_positives(score):
+        order = np.argsort(-np.asarray(score), kind="stable")
+        cumulative_positives = np.cumsum(y_true[order])
+        alerts = int(np.searchsorted(cumulative_positives, target_positives) + 1)
+        false_positives = alerts - target_positives
+        return alerts, false_positives
 
-    alerts_a, fp_a, recall_a = alerts_for_recall(score_a)
-    alerts_b, fp_b, recall_b = alerts_for_recall(score_b)
+    alerts_a, fp_a = alerts_to_capture_n_positives(score_a)
+    alerts_b, fp_b = alerts_to_capture_n_positives(score_b)
     reduction = 0.0 if fp_a == 0 else (fp_a - fp_b) / fp_a
     return {
-        "model_a_alerts": alerts_a, "model_a_fp": fp_a, "model_a_recall": recall_a,
-        "model_b_alerts": alerts_b, "model_b_fp": fp_b, "model_b_recall": recall_b,
+        "target_positives": target_positives,
+        "achieved_recall": target_positives / total_positives,
+        "model_a_alerts": alerts_a,
+        "model_a_fp": fp_a,
+        "model_b_alerts": alerts_b,
+        "model_b_fp": fp_b,
         "fp_reduction_b_vs_a": round(reduction, 4),
     }

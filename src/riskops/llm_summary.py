@@ -6,11 +6,14 @@ fonctionnent hors-ligne. Avec la cle, on appelle Claude et on force un JSON
 conforme a LLMSynthesis (on rejette toute sortie qui ne valide pas le schema).
 """
 import json
+import logging
 import os
 
 from pydantic import ValidationError
 
 from riskops.schemas import LLMSynthesis
+
+LOGGER = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """Tu es un assistant d'investigation AML (anti-blanchiment) pour des
 analystes risque bancaires. On te donne le score de risque d'une transaction, les
@@ -38,6 +41,7 @@ def _fallback_synthesis(context: dict) -> LLMSynthesis:
         ),
         recommended_action=action,
         confidence="low",
+        synthesis_source="fallback",
     )
 
 
@@ -58,6 +62,15 @@ def generate_synthesis(context: dict) -> LLMSynthesis:
         )
         raw_text = response.content[0].text
         data = json.loads(raw_text)
+        data["synthesis_source"] = "llm"
         return LLMSynthesis.model_validate(data)
-    except (ValidationError, json.JSONDecodeError, Exception):
+    except (
+        anthropic.APIError,
+        ValidationError,
+        json.JSONDecodeError,
+        IndexError,
+        AttributeError,
+        TypeError,
+    ) as exc:
+        LOGGER.warning("Synthèse LLM indisponible, utilisation du fallback: %s", exc)
         return _fallback_synthesis(context)

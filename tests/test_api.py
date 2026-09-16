@@ -32,7 +32,10 @@ def client(tmp_path, monkeypatch):
 
     models_dir = tmp_path / "models"
     models_dir.mkdir()
-    joblib.dump({"model": model, "features": FEATURE_COLUMNS}, models_dir / "xgb_model.joblib")
+    joblib.dump(
+        {"model": model, "features": FEATURE_COLUMNS, "threshold": 0.5},
+        models_dir / "xgb_model.joblib",
+    )
     joblib.dump(explainer, models_dir / "shap_explainer.joblib")
 
     monkeypatch.setattr(api_module, "ROOT", tmp_path)
@@ -72,6 +75,7 @@ def test_decision_requires_justification(client):
 def test_decision_is_persisted_in_audit_log(client):
     alerts = client.get("/alerts", params={"limit": 1}).json()
     txn_id = alerts[0]["transaction_id"]
+    client.get(f"/alerts/{txn_id}")
     resp = client.post(
         f"/alerts/{txn_id}/decision",
         json={"decision": "Escalate", "justification": "Montant eleve et contrepartie inhabituelle"},
@@ -79,6 +83,8 @@ def test_decision_is_persisted_in_audit_log(client):
     assert resp.status_code == 200
     audit = client.get("/audit").json()
     assert any(a["transaction_id"] == txn_id and a["decision"] == "Escalate" for a in audit)
+    saved = next(a for a in audit if a["transaction_id"] == txn_id)
+    assert saved["synthesis_source"] == "fallback"
 
 
 def test_unknown_transaction_returns_404(client):

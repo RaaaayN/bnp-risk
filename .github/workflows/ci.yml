@@ -15,5 +15,16 @@ jobs:
           cache: "pip"
       - name: Install dependencies
         run: pip install -r requirements.txt -e .
+      - name: Lint
+        run: ruff check .
       - name: Run tests
         run: pytest -v
+      - name: Reproduce training metrics and README
+        run: |
+          cp models/metrics.json /tmp/expected-metrics.json
+          python src/riskops/data_gen.py
+          python src/riskops/features.py
+          python src/riskops/train.py
+          python scripts/compare_metrics.py /tmp/expected-metrics.json models/metrics.json
+          python scripts/render_readme_metrics.py
+          git diff --exit-code -- README.md

@@ -44,6 +44,7 @@ class LLMSynthesis(BaseModel):
     risk_narrative: str = Field(description="Explication du raisonnement de risque")
     recommended_action: Literal["Clear", "Investigate", "Escalate"]
     confidence: Literal["low", "medium", "high"]
+    synthesis_source: Literal["llm", "fallback"]
 
 
 class DecisionRequest(BaseModel):

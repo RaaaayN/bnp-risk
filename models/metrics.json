@@ -1,0 +1,110 @@
+{
+  "seed": 42,
+  "n_days_validation": 14,
+  "n_days_test": 14,
+  "threshold_calibration": {
+    "dataset": "validation",
+    "daily_capacity": 20
+  },
+  "logreg": {
+    "validation_pr_auc": 0.2649425076229757,
+    "test_pr_auc": 0.30077119870013963,
+    "test_pr_auc_95pct_ci": [
+      0.1028,
+      0.5831
+    ],
+    "validation_calibrated_threshold": 0.7422986700412454,
+    "test_alerts": 182,
+    "test_alerts_per_day": 13.0,
+    "test_precision_at_fixed_threshold": 0.21978021978021978,
+    "test_recall_at_fixed_threshold": 0.7843137254901961,
+    "alerts_per_10k_at_p99": 100.0
+  },
+  "xgboost": {
+    "validation_pr_auc": 0.3338573673815945,
+    "best_iteration": 61,
+    "test_pr_auc": 0.35727876627535415,
+    "test_pr_auc_95pct_ci": [
+      0.1091,
+      0.6379
+    ],
+    "validation_calibrated_threshold": 0.593908965587616,
+    "test_alerts": 177,
+    "test_alerts_per_day": 12.642857142857142,
+    "test_precision_at_fixed_threshold": 0.20903954802259886,
+    "test_recall_at_fixed_threshold": 0.7254901960784313,
+    "alerts_per_10k_at_p99": 100.0
+  },
+  "xgboost_transaction_only_ablation": {
+    "pr_auc": 0.1780191239347474,
+    "history_feature_pr_auc_lift": 0.17925964234060676
+  },
+  "pr_auc_difference_xgb_minus_logreg_95pct_ci": [
+    -0.2505,
+    0.3149
+  ],
+  "bootstrap_valid_resamples": 400,
+  "selection_metric": "validation_pr_auc",
+  "selected_model": "xgboost",
+  "fp_reduction_xgb_vs_logreg_at_equal_recall": {
+    "target_positives": 26,
+    "achieved_recall": 0.5098039215686274,
+    "model_a_alerts": 70,
+    "model_a_fp": 44,
+    "model_b_alerts": 69,
+    "model_b_fp": 43,
+    "fp_reduction_b_vs_a": 0.0227
+  },
+  "business_case": [
+    {
+      "daily_capacity": 5,
+      "threshold": 0.949983,
+      "test_alerts": 43,
+      "test_alerts_per_day": 3.07,
+      "test_recall": 0.3725,
+      "test_precision": 0.4419,
+      "test_positives_caught": 19,
+      "test_total_positives": 51
+    },
+    {
+      "daily_capacity": 10,
+      "threshold": 0.88627,
+      "test_alerts": 100,
+      "test_alerts_per_day": 7.14,
+      "test_recall": 0.5686,
+      "test_precision": 0.29,
+      "test_positives_caught": 29,
+      "test_total_positives": 51
+    },
+    {
+      "daily_capacity": 20,
+      "threshold": 0.593909,
+      "test_alerts": 177,
+      "test_alerts_per_day": 12.64,
+      "test_recall": 0.7255,
+      "test_precision": 0.209,
+      "test_positives_caught": 37,
+      "test_total_positives": 51
+    },
+    {
+      "daily_capacity": 50,
+      "threshold": 0.132952,
+      "test_alerts": 451,
+      "test_alerts_per_day": 32.21,
+      "test_recall": 0.8824,
+      "test_precision": 0.0998,
+      "test_positives_caught": 45,
+      "test_total_positives": 51
+    },
+    {
+      "daily_capacity": 100,
+      "threshold": 0.053822,
+      "test_alerts": 1104,
+      "test_alerts_per_day": 78.86,
+      "test_recall": 1.0,
+      "test_precision": 0.0462,
+      "test_positives_caught": 51,
+      "test_total_positives": 51
+    }
+  ]
+}

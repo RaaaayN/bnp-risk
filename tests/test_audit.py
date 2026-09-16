@@ -46,5 +46,16 @@ def test_record_and_list_decision(conn):
     assert rows[0]["transaction_id"] == "TXN1"
 
 
+def test_synthesis_source_is_persisted(conn):
+    record_decision(
+        conn, transaction_id="TXN2", model_name="xgboost", model_version="v1",
+        threshold=0.5, score=0.8, features={}, shap_top_factors=[],
+        decision="Investigate", justification="Synthese a verifier par analyste",
+        decision_by="analyst", llm_summary={"summary": "test", "synthesis_source": "fallback"},
+    )
+    row = list_decisions(conn)[0]
+    assert row["synthesis_source"] == "fallback"
+
+
 def test_all_decisions_are_valid_enum_values():
     assert VALID_DECISIONS == {"Clear", "Investigate", "Escalate"}

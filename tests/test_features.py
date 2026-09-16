@@ -1,6 +1,6 @@
 import pandas as pd
 
-from riskops.features import build_features, FEATURE_COLUMNS
+from riskops.features import FEATURE_COLUMNS, build_features
 
 
 def _toy_raw():

@@ -1,4 +1,3 @@
-import os
 
 from riskops.llm_summary import generate_synthesis
 from riskops.schemas import LLMSynthesis
@@ -16,6 +15,7 @@ def test_fallback_synthesis_without_api_key(monkeypatch):
     assert isinstance(result, LLMSynthesis)
     assert result.recommended_action == "Escalate"
     assert "amount_log" in result.key_red_flags
+    assert result.synthesis_source == "fallback"
 
 
 def test_fallback_synthesis_is_schema_valid_for_low_score(monkeypatch):

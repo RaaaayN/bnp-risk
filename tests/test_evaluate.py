@@ -1,7 +1,14 @@
 import numpy as np
 
 from riskops.evaluate import (
-    alerts_per_10k, bootstrap_pr_auc_comparison, business_case_sweep, precision_at_k, pr_auc, recall_at_budget,
+    alerts_per_10k,
+    bootstrap_pr_auc_comparison,
+    business_case_sweep,
+    false_positive_reduction_at_equal_recall,
+    metrics_at_threshold,
+    pr_auc,
+    precision_at_k,
+    recall_at_budget,
     threshold_for_budget,
 )
 
@@ -40,9 +47,30 @@ def test_threshold_for_budget_matches_kth_score():
 
 
 def test_business_case_sweep_output_shape():
-    df = business_case_sweep(Y_TRUE, Y_SCORE, n_days=1, capacities=(2, 5))
+    evaluation_score = Y_SCORE - 0.1
+    df = business_case_sweep(
+        Y_SCORE, 1, Y_TRUE, evaluation_score, 1, capacities=(2, 5)
+    )
     assert list(df["daily_capacity"]) == [2, 5]
-    assert (df["recall"] <= 1.0).all() and (df["recall"] >= 0.0).all()
+    assert (df["test_recall"] <= 1.0).all() and (df["test_recall"] >= 0.0).all()
+    assert not (df["test_alerts_per_day"] == df["daily_capacity"]).all()
+
+
+def test_metrics_at_threshold_does_not_recalibrate_on_evaluation_scores():
+    metrics = metrics_at_threshold(Y_TRUE, Y_SCORE, threshold=0.8, n_days=2)
+    assert metrics["alerts"] == 2
+    assert metrics["alerts_per_day"] == 1.0
+    assert metrics["recall"] == 2 / 3
+
+
+def test_false_positive_comparison_uses_the_same_positive_target():
+    score_b = np.array([0.01, 0.02, 0.03, 0.04, 0.7, 0.05, 0.9, 0.06, 0.08, 0.8])
+    comparison = false_positive_reduction_at_equal_recall(
+        Y_TRUE, Y_SCORE, score_b, target_recall=0.5
+    )
+    assert comparison["target_positives"] == 2
+    assert comparison["achieved_recall"] == 2 / 3
+    assert "model_a_recall" not in comparison
 
 
 def test_cluster_bootstrap_returns_paired_confidence_interval():

@@ -10,13 +10,17 @@ import pandas as pd
 from fastapi import FastAPI, HTTPException
 
 from riskops.audit import get_connection, list_decisions, record_decision
-from riskops.evaluate import threshold_for_budget
 from riskops.features import FEATURE_COLUMNS
 from riskops.llm_summary import generate_synthesis
 from riskops.schemas import (
-    AccountHistoryItem, AlertDetail, AlertSummary, DecisionRequest, DecisionResponse, RiskFactor,
+    AccountHistoryItem,
+    AlertDetail,
+    AlertSummary,
+    DecisionRequest,
+    DecisionResponse,
+    RiskFactor,
 )
-from riskops.train import DAILY_INVESTIGATION_CAPACITY, chronological_split
+from riskops.train import chronological_split
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 MODELS_DIR = ROOT / "models"
@@ -66,13 +70,17 @@ def load_artifacts():
     scores = model.predict_proba(X_model)[:, 1]
     shap_values = explainer.shap_values(X_model)
 
-    n_days = max((test_df["Timestamp"].max() - test_df["Timestamp"].min()).days, 1)
-    threshold = threshold_for_budget(scores, DAILY_INVESTIGATION_CAPACITY, n_days)
+    if "threshold" not in bundle:
+        raise ValueError(
+            "Artefact sans seuil de validation. Relancer src/riskops/train.py."
+        )
+    threshold = float(bundle["threshold"])
 
     test_df["score"] = scores
     _state.update(
         model=model, explainer=explainer, df=test_df, shap_values=shap_values,
         threshold=threshold, conn=get_connection(AUDIT_DB_PATH), model_name=model_name,
+        syntheses={},
     )
 
 
@@ -150,6 +158,7 @@ def get_alert_detail(transaction_id: str, with_llm: bool = True):
             "account_history_count": len(history),
         }
         detail.llm_synthesis = generate_synthesis(context)
+        _state["syntheses"][transaction_id] = detail.llm_synthesis.model_dump()
 
     return detail
 
@@ -170,6 +179,7 @@ def post_decision(transaction_id: str, decision_req: DecisionRequest):
         features={c: float(row[c]) for c in FEATURE_COLUMNS}, shap_top_factors=top_factors,
         decision=decision_req.decision, justification=decision_req.justification,
         decision_by=decision_req.decision_by,
+        llm_summary=_state["syntheses"].get(transaction_id),
     )
     saved = _state["conn"].execute("SELECT * FROM audit_log WHERE id = ?", (decision_id,)).fetchone()
     return DecisionResponse(

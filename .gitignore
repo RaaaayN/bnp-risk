@@ -6,6 +6,7 @@ data/*.csv
 data/*.parquet
 models/*.joblib
 models/*.json
+!models/metrics.json
 models/*.csv
 models/*.png
 audit.db
