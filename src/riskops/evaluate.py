@@ -9,6 +9,51 @@ def pr_auc(y_true, y_score) -> float:
     return float(average_precision_score(y_true, y_score))
 
 
+def bootstrap_pr_auc_comparison(
+    y_true, score_a, score_b, groups, n_bootstrap: int = 400, seed: int = 42
+) -> dict:
+    """IC bootstrap par compte pour deux PR-AUC et leur différence appariée.
+
+    Les lignes d'un épisode ne sont pas indépendantes. Ré-échantillonner les
+    comptes, plutôt que les transactions, conserve cette dépendance dans
+    l'estimation de l'incertitude.
+    """
+    y_true = np.asarray(y_true)
+    score_a = np.asarray(score_a)
+    score_b = np.asarray(score_b)
+    groups = np.asarray(groups)
+    unique_groups = np.unique(groups)
+    rows_by_group = {group: np.flatnonzero(groups == group) for group in unique_groups}
+    rng = np.random.default_rng(seed)
+    auc_a, auc_b, differences = [], [], []
+
+    for _ in range(n_bootstrap):
+        sampled_groups = rng.choice(unique_groups, size=len(unique_groups), replace=True)
+        sampled_rows = np.concatenate([rows_by_group[group] for group in sampled_groups])
+        sampled_y = y_true[sampled_rows]
+        if sampled_y.min() == sampled_y.max():
+            continue
+        value_a = average_precision_score(sampled_y, score_a[sampled_rows])
+        value_b = average_precision_score(sampled_y, score_b[sampled_rows])
+        auc_a.append(value_a)
+        auc_b.append(value_b)
+        differences.append(value_b - value_a)
+
+    if not differences:
+        raise ValueError("Impossible de calculer un bootstrap contenant les deux classes")
+
+    def interval(values):
+        low, high = np.quantile(values, [0.025, 0.975])
+        return [round(float(low), 4), round(float(high), 4)]
+
+    return {
+        "model_a_95pct_ci": interval(auc_a),
+        "model_b_95pct_ci": interval(auc_b),
+        "difference_b_minus_a_95pct_ci": interval(differences),
+        "valid_resamples": len(differences),
+    }
+
+
 def precision_at_k(y_true, y_score, k: int) -> float:
     k = min(k, len(y_score))
     order = np.argsort(-np.asarray(y_score))[:k]
@@ -45,7 +90,7 @@ def threshold_for_budget(y_score, daily_budget: int, n_days: int) -> float:
     return float(sorted_scores[total_budget - 1])
 
 
-def business_case_sweep(y_true, y_score, n_days: int, capacities=(50, 100, 150, 200, 300)) -> pd.DataFrame:
+def business_case_sweep(y_true, y_score, n_days: int, capacities=(5, 10, 20, 50, 100)) -> pd.DataFrame:
     """Pour chaque capacite d'investigation quotidienne, calcule le seuil
     correspondant, le rappel obtenu et le nombre d'alertes/jour."""
     rows = []

@@ -21,7 +21,7 @@ from riskops.train import DAILY_INVESTIGATION_CAPACITY, chronological_split
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 MODELS_DIR = ROOT / "models"
 AUDIT_DB_PATH = ROOT / "audit.db"
-MODEL_VERSION = "xgb-v1"
+MODEL_VERSION = "champion-v2"
 
 _state: dict = {}
 
@@ -49,13 +49,22 @@ def load_artifacts():
     _, _, test_df = chronological_split(df)
     test_df = test_df.reset_index(drop=True)
 
-    bundle = joblib.load(MODELS_DIR / "xgb_model.joblib")
+    champion_path = MODELS_DIR / "champion_model.joblib"
+    if champion_path.exists():
+        bundle = joblib.load(champion_path)
+        explainer = joblib.load(MODELS_DIR / "champion_explainer.joblib")
+    else:  # compatibilité avec les artefacts v1 et les fixtures de test
+        bundle = joblib.load(MODELS_DIR / "xgb_model.joblib")
+        bundle = {**bundle, "scaler": None, "model_name": "xgboost"}
+        explainer = joblib.load(MODELS_DIR / "shap_explainer.joblib")
     model = bundle["model"]
-    explainer = joblib.load(MODELS_DIR / "shap_explainer.joblib")
+    scaler = bundle.get("scaler")
+    model_name = bundle.get("model_name", "xgboost")
 
     X_test = test_df[FEATURE_COLUMNS]
-    scores = model.predict_proba(X_test)[:, 1]
-    shap_values = explainer.shap_values(X_test)
+    X_model = scaler.transform(X_test) if scaler is not None else X_test
+    scores = model.predict_proba(X_model)[:, 1]
+    shap_values = explainer.shap_values(X_model)
 
     n_days = max((test_df["Timestamp"].max() - test_df["Timestamp"].min()).days, 1)
     threshold = threshold_for_budget(scores, DAILY_INVESTIGATION_CAPACITY, n_days)
@@ -63,7 +72,7 @@ def load_artifacts():
     test_df["score"] = scores
     _state.update(
         model=model, explainer=explainer, df=test_df, shap_values=shap_values,
-        threshold=threshold, conn=get_connection(AUDIT_DB_PATH),
+        threshold=threshold, conn=get_connection(AUDIT_DB_PATH), model_name=model_name,
     )
 
 
@@ -129,7 +138,7 @@ def get_alert_detail(transaction_id: str, with_llm: bool = True):
         transaction_id=row["Transaction Id"], timestamp=str(row["Timestamp"]),
         amount=float(row["amount"]), score=float(row["score"]),
         risk_band=_risk_band(row["score"], threshold),
-        model_name="xgboost", model_version=MODEL_VERSION, threshold=float(threshold),
+        model_name=_state["model_name"], model_version=MODEL_VERSION, threshold=float(threshold),
         top_factors=top_factors, account_history=history,
         suspicious_counterparties=[int(c) for c in suspicious_cp],
     )
@@ -156,7 +165,7 @@ def post_decision(transaction_id: str, decision_req: DecisionRequest):
     ]
 
     decision_id = record_decision(
-        _state["conn"], transaction_id=transaction_id, model_name="xgboost",
+        _state["conn"], transaction_id=transaction_id, model_name=_state["model_name"],
         model_version=MODEL_VERSION, threshold=float(_state["threshold"]), score=float(row["score"]),
         features={c: float(row[c]) for c in FEATURE_COLUMNS}, shap_top_factors=top_factors,
         decision=decision_req.decision, justification=decision_req.justification,

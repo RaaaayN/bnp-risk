@@ -1,7 +1,7 @@
 import numpy as np
 
 from riskops.evaluate import (
-    alerts_per_10k, business_case_sweep, precision_at_k, pr_auc, recall_at_budget,
+    alerts_per_10k, bootstrap_pr_auc_comparison, business_case_sweep, precision_at_k, pr_auc, recall_at_budget,
     threshold_for_budget,
 )
 
@@ -43,3 +43,12 @@ def test_business_case_sweep_output_shape():
     df = business_case_sweep(Y_TRUE, Y_SCORE, n_days=1, capacities=(2, 5))
     assert list(df["daily_capacity"]) == [2, 5]
     assert (df["recall"] <= 1.0).all() and (df["recall"] >= 0.0).all()
+
+
+def test_cluster_bootstrap_returns_paired_confidence_interval():
+    groups = np.repeat(np.arange(5), 2)
+    comparison = bootstrap_pr_auc_comparison(
+        Y_TRUE, Y_SCORE - 0.05, Y_SCORE, groups, n_bootstrap=50, seed=1
+    )
+    assert comparison["valid_resamples"] > 0
+    assert len(comparison["difference_b_minus_a_95pct_ci"]) == 2

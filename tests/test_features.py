@@ -42,8 +42,25 @@ def test_prior_avg_only_uses_past_transactions():
     assert acct_100.loc[2, "acct_avg_amount_prior"] == 1500.0
 
 
+def test_rolling_volume_and_counterparty_features_only_use_the_past():
+    feats = build_features(_toy_raw())
+    acct_100 = feats[feats["Account"] == 100].sort_values("Timestamp").reset_index(drop=True)
+    assert acct_100.loc[0, "acct_amount_sum_24h"] == 0.0
+    assert acct_100.loc[1, "acct_amount_sum_24h"] == 1000.0
+    assert acct_100.loc[1, "counterparty_seen_before"] == 1
+    assert acct_100.loc[2, "acct_distinct_counterparties_7d"] == 1
+    assert acct_100.loc[2, "hours_since_prev_txn"] == 22.0
+
+
 def test_cross_bank_and_currency_flags():
     feats = build_features(_toy_raw())
     row = feats.iloc[0]
     assert row["is_cross_bank"] == 1  # From Bank 1 -> To Bank 2
     assert row["is_cross_currency"] == 0
+
+
+def test_payment_format_is_not_encoded_as_an_ordinal():
+    feats = build_features(_toy_raw())
+    row = feats.sort_values("Timestamp").iloc[0]
+    assert row["payment_format_wire"] == 1
+    assert sum(row[c] for c in FEATURE_COLUMNS if c.startswith("payment_format_")) == 1

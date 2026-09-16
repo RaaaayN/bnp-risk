@@ -42,9 +42,12 @@ Le [dataset IBM AML](https://www.kaggle.com/datasets/ealtman2019/ibm-transaction
 blanchiment) pèse plusieurs Go et nécessite des credentials Kaggle. Pour ce
 projet de quelques jours, [`src/riskops/data_gen.py`](src/riskops/data_gen.py)
 génère un jeu synthétique avec **exactement le même schéma de colonnes** et un
-déséquilibre de classe réaliste (~0.3% de blanchiment). Le pipeline (features,
-entraînement, API) fonctionne à l'identique avec le vrai CSV IBM : il suffit de
-le placer dans `data/raw_transactions.csv`.
+déséquilibre de classe réaliste (~0.3% de blanchiment). Les labels ne sont pas
+tirés ligne par ligne : ils correspondent à des épisodes multi-transactions
+portés par un compte (structuration, fan-out, transit rapide). Des rafales
+légitimes proches servent de contrôles négatifs difficiles. Le pipeline
+(features, entraînement, API) accepte aussi le vrai CSV IBM placé dans
+`data/raw_transactions.csv`.
 
 ## Quickstart
 
@@ -76,8 +79,9 @@ avant de lancer l'API.
 pytest -v
 ```
 
-Couverture : absence de fuite temporelle dans les features, métriques métier,
-journal d'audit (justification/décision obligatoires), endpoints API
+Couverture : signal comportemental du générateur, absence de fuite temporelle
+dans les features, métriques métier, journal d'audit (justification/décision
+obligatoires), endpoints API
 (file d'alertes, détail, décision, 404), synthèse LLM en mode hors-ligne.
 
 ## Méthodologie
@@ -90,41 +94,45 @@ Quelques décisions qui comptent plus que les autres :
   jamais vu.
 - Les features "historique de compte" (nombre de transactions antérieures,
   moyenne glissante des montants, contreparties distinctes sur 7 jours,
-  volume sur 24h) ne regardent que le passé de chaque compte. C'est le genre
+  nombre et montant cumulé sur 24h, délai depuis le dernier flux) ne regardent
+  que le passé de chaque compte. C'est le genre
   de détail qu'on peut louper facilement et qui fausse tout après coup.
 - Deux modèles comparés, pas un seul : régression logistique en baseline
   (`class_weight="balanced"`) et XGBoost (`scale_pos_weight` ajusté au
   déséquilibre), pour pouvoir chiffrer l'apport du second plutôt que
   l'affirmer.
-- SHAP TreeExplainer sur XGBoost pour l'explicabilité, facteur par
-  transaction, exposé tel quel dans l'API et l'UI.
+- Le champion est choisi sur le PR-AUC de validation, jamais sur le test.
+  L'API charge ensuite automatiquement ce champion. SHAP explique chaque
+  transaction dans l'API et l'UI.
 - Pas d'accuracy comme métrique — avec moins de 1% de positifs, un modèle qui
   répond toujours "non suspect" atteindrait ~99.7% d'accuracy en étant
   complètement inutile. On regarde plutôt le PR-AUC, la precision/recall à
   budget d'investigation constant, et la réduction de faux positifs à recall
   comparable (détail dans [`src/riskops/evaluate.py`](src/riskops/evaluate.py)).
 
-Résultats obtenus sur le jeu de test synthétique (13 jours, 60 transactions
-positives ; voir `models/metrics.json` — les chiffres exacts dépendent de la
-seed et varient légèrement à chaque régénération des données) :
+Résultats obtenus sur le jeu de test synthétique (13 jours, 51 transactions
+positives ; seed 42, voir `models/metrics.json`) :
 
-| Modèle | PR-AUC | Precision @ budget (100/jour) | Recall @ budget (100/jour) |
+| Modèle | PR-AUC test (IC 95% par compte) | Precision @ 20/jour | Recall @ 20/jour |
 |---|---|---|---|
-| Logistic Regression (baseline) | 0.099 | 2.5% | 53.3% |
-| XGBoost | 0.087 | 3.0% | 65.0% |
+| Logistic Regression (baseline) | 0.301 [0.103 ; 0.583] | 17.7% | 90.2% |
+| XGBoost | 0.556 [0.237 ; 0.796] | 17.7% | 90.2% |
 
-À recall égal (50%), XGBoost génère 854 alertes contre 1115 pour la
-régression logistique, soit -24% de faux positifs
-(`fp_reduction_xgb_vs_logreg_at_equal_recall` dans `models/metrics.json`) : à
-qualité de détection comparable, il fait perdre moins de temps aux analystes
-sur des dossiers non-suspects. La precision@budget reste faible en absolu
-(~3%), mais c'est normal vu que la classe positive est extrêmement rare
-(0.3% des transactions) : sur un budget de 1 300 dossiers (100/jour × 13
-jours), la majorité des alertes seront des faux positifs même avec un bon
-modèle de triage. C'est justement pour ça qu'on regarde le recall à budget
-constant plutôt que la precision seule pour choisir le seuil.
+XGBoost est retenu parce que son PR-AUC de **validation** est supérieur
+(0.319 contre 0.265), le test restant hors du critère de sélection. Son avantage
+test est important en valeur ponctuelle, mais l'intervalle bootstrap apparié
+de la différence contient zéro ([-0.106 ; 0.543]) : avec seulement 51
+positifs, on ne prétend donc pas avoir établi statistiquement sa supériorité.
+À recall voisin de 50%, il produit 58 alertes contre 71 pour la régression
+logistique, soit 29% de faux positifs en moins — là encore un résultat de ce
+jeu synthétique, pas une promesse de production.
 
-## Business case : quel seuil pour 100 dossiers/jour ?
+L'ablation répond directement à la question du signal comportemental : le
+même XGBoost limité aux caractéristiques de la transaction courante obtient
+0.196 de PR-AUC, contre 0.556 avec l'historique (+0.360). Les fenêtres de
+compte apportent donc bien un signal mesurable dans ce générateur.
+
+## Business case : quel seuil pour 20 dossiers/jour ?
 
 Un analyste ne peut traiter qu'un nombre fini de dossiers par jour. Le vrai
 levier métier n'est pas "améliorer le modèle" dans l'absolu, mais choisir le
@@ -137,29 +145,22 @@ obtenu et la précision :
 python src/riskops/train.py   # écrit models/business_case.csv
 ```
 
-| Capacité (dossiers/jour) | Seuil | Recall | Precision | Positifs détectés / 60 |
+| Capacité (dossiers/jour) | Seuil | Recall | Precision | Positifs détectés / 51 |
 |---|---|---|---|---|
-| 50  | 0.247 | 45.0% | 4.15% | 27 |
-| **100** | **0.085** | **65.0%** | **3.00%** | **39** |
-| 150 | 0.043 | 78.3% | 2.41% | 47 |
-| 200 | 0.028 | 86.7% | 2.00% | 52 |
-| 300 | 0.014 | 93.3% | 1.44% | 56 |
+| 5 | 0.6884 | 58.8% | 46.2% | 30 |
+| 10 | 0.1263 | 72.6% | 28.5% | 37 |
+| **20** | **0.0065** | **90.2%** | **17.7%** | **46** |
+| 50 | 0.0009 | 100.0% | 7.9% | 51 |
+| 100 | 0.0003 | 100.0% | 3.9% | 51 |
 
-Lecture métier : entre 50 et 100 dossiers/jour, chaque dossier
-d'investigation supplémentaire rapporte encore ~0.24 cas de blanchiment
-détecté en plus (+20 points de recall pour +50 dossiers/jour). Entre 100 et
-300, le rendement marginal chute nettement (+28 points de recall pour +200
-dossiers/jour, soit un rendement par dossier ~4x plus faible), parce que les
-transactions ajoutées au budget ont un score de plus en plus faible donc une
-probabilité de blanchiment de plus en plus faible. Avec une capacité de 100
-dossiers par jour, le seuil ≈ 0.085 capture 65% des cas de blanchiment du
-test (39/60) sans dépasser la capacité opérationnelle — c'est ce seuil qui
-est utilisé par défaut par l'API (`DAILY_INVESTIGATION_CAPACITY = 100` dans
-`src/riskops/train.py`). Monter à 300/jour ne rapporterait que 17 détections
-de plus pour 3x plus de charge analyste, un arbitrage clairement défavorable
-sauf si le coût d'un blanchiment manqué est jugé vraiment extrême.
+Lecture métier : passer de 10 à 20 dossiers/jour retrouve neuf cas
+supplémentaires sur la période. Passer de 20 à 50 n'en retrouve que cinq pour
+30 investigations quotidiennes supplémentaires. Le seuil associé à 20/jour
+est celui utilisé par défaut par l'API. Ces chiffres servent à illustrer le
+choix sous contrainte ; ils ne doivent pas être extrapolés hors de ce jeu
+synthétique.
 
-Coût/gain : chaque faux positif en moins à recall constant (ici -24% de FP
+Coût/gain : chaque faux positif en moins à recall constant (ici -29% de FP
 pour XGBoost vs la baseline, voir plus haut) libère du temps analyste
 réinvestissable sur des dossiers à plus fort risque ; chaque vrai positif
 détecté en plus évite un risque réglementaire/réputationnel dont le coût
@@ -187,8 +188,9 @@ data_gen.py → features.py → train.py (LogReg + XGBoost + SHAP)
 
 ## Limites (assumées pour un projet de quelques jours)
 
-- Données synthétiques : les patterns de blanchiment sont simplifiés (pas de
-  structuration multi-sauts, pas de graphe de transactions).
+- Données synthétiques : les épisodes injectés rendent les tests
+  méthodologiques non triviaux, mais ne prouvent aucune performance sur des
+  opérations réelles (pas de vérité terrain ni de graphe multi-sauts).
 - Pas de ré-entraînement automatique / monitoring de drift.
 - La synthèse LLM n'est pas garantie factuellement correcte : elle est
   affichée comme aide à la décision, jamais comme source de vérité — la

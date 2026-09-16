@@ -9,7 +9,7 @@ chaque choix, ce qui a été écarté et pourquoi, et les limites qu'on assume.
 Un modèle de détection AML n'est pas évalué sur sa capacité à « bien
 prédire » dans l'absolu, mais sur sa capacité à **améliorer une décision sous
 contrainte** : une équipe d'analystes a une capacité de traitement finie
-(ici, 100 dossiers/jour), et le coût d'une erreur n'est pas symétrique.
+(ici, 20 dossiers/jour), et le coût d'une erreur n'est pas symétrique.
 
 | Erreur | Coût |
 |---|---|
@@ -71,7 +71,8 @@ Deux garde-fous dans [`features.py`](../src/riskops/features.py) :
 
 - Chaque feature d'historique de compte (`acct_txn_count_prior`,
   `acct_avg_amount_prior`, `acct_distinct_counterparties_7d`,
-  `acct_txn_count_24h`) est calculée par un `groupby` trié par compte puis
+  `acct_txn_count_24h`, `acct_amount_sum_24h`, `hours_since_prev_txn`) est
+  calculée par un `groupby` trié par compte puis
   par timestamp, avec un décalage explicite (`cumsum() - amount`, comptage
   strictement antérieur) — la transaction courante ne voit jamais sa propre
   contribution ni le futur du compte. `tests/test_features.py` teste
@@ -98,15 +99,23 @@ par une méthode auditable, plutôt qu'à en inventer une.
 
 ### 2.4 Deux modèles comparés, pas un seul
 
-La régression logistique n'est pas là par complétude académique : c'est la
-**baseline de référence** qui permet de justifier XGBoost par un chiffre
-plutôt que par affirmation. Sur le jeu de test (13 jours, ~120k transactions
-au total dont 60 positives), le résultat obtenu (`models/metrics.json`) : à
-recall égal (50%, soit 30 des 60 cas de blanchiment retrouvés), XGBoost
-génère 854 alertes contre 1115 pour la régression logistique, soit **-24% de
-faux positifs** à qualité de détection identique. C'est ce chiffre — pas un
-PR-AUC abstrait — qui justifie le choix du modèle final en production, parce
-qu'il se traduit directement en charge analyste économisée.
+La régression logistique est la baseline de référence. Le champion est choisi
+sur le PR-AUC de validation, avant toute consultation du test : XGBoost obtient
+ici 0.319 contre 0.265, puis 0.556 contre 0.301 sur le test final. À recall
+voisin de 50%, il génère 58 alertes contre 71 pour la baseline, soit 29% de
+faux positifs en moins.
+
+Le test ne contient toutefois que 51 positifs. Un bootstrap par compte — et
+non par ligne, car les transactions d'un épisode sont dépendantes — donne un
+IC 95% de [-0.106 ; 0.543] pour la différence de PR-AUC. L'intervalle contient
+zéro : XGBoost est le champion défini par la validation, mais ce petit jeu ne
+permet pas d'affirmer que sa supériorité est statistiquement établie.
+
+Une ablation entraîne aussi le même XGBoost sans aucune caractéristique
+d'historique. Son PR-AUC tombe de 0.556 à 0.196. Ce contrôle démontre que le
+gain ne vient pas uniquement du montant ou du format de la transaction
+courante et que les fenêtres comportementales ont effectivement un signal à
+apprendre.
 
 ### 2.5 Le LLM ne doit jamais être une source de vérité
 
@@ -154,7 +163,7 @@ choisi pour maximiser le F1-score ou un point arbitraire de la courbe
 precision/recall ignore la vraie contrainte : le nombre de dossiers qu'une
 équipe peut traiter par jour. `threshold_for_budget` et
 `business_case_sweep` ([`evaluate.py`](../src/riskops/evaluate.py)) inversent
-le problème : on part de la capacité (100/jour), on en déduit le seuil, puis
+le problème : on part de la capacité (20/jour), on en déduit le seuil, puis
 on mesure le recall obtenu. C'est ce calcul qui répond à la question posée en
 introduction du projet — voir la section *Business case* du README pour les
 chiffres et leur lecture.
@@ -186,17 +195,19 @@ Le README le mentionne déjà brièvement ; voici le raisonnement complet.
 - **Dataset synthétique plutôt que le CSV IBM réel** : le dataset Kaggle
   pèse plusieurs Go et nécessite des credentials — un obstacle d'accès
   disproportionné par rapport à l'objectif (démontrer une méthodologie). Le
-  générateur ([`data_gen.py`](../src/riskops/data_gen.py)) reproduit
-  exactement le schéma de colonnes IBM et un déséquilibre de classe réaliste,
-  ce qui rend le pipeline directement réutilisable sur le vrai fichier sans
-  modification de code — voir README, section *Données*.
+  générateur ([`data_gen.py`](../src/riskops/data_gen.py)) reproduit le schéma
+  de colonnes IBM et un déséquilibre de classe réaliste. Il construit d'abord
+  des profils persistants de comptes, puis injecte des épisodes causaux de
+  structuration, fan-out et transit rapide, ainsi que des épisodes bénins
+  proches. Le label dépend donc du comportement observable du compte, pas
+  d'un tirage i.i.d. par ligne.
 
 ## 4. Limites assumées
 
-- Les patterns de blanchiment synthétiques sont volontairement bruités mais
-  restent plus simples que des schémas réels multi-sauts — les métriques
-  obtenues ne sont pas transposables telles quelles à un dataset réel, elles
-  valident la méthodologie, pas une performance absolue.
+- Les patterns synthétiques sont volontairement bruités et accompagnés de
+  contrôles négatifs difficiles, mais restent plus simples que des schémas
+  réels multi-sauts. Les métriques valident le pipeline et l'utilité de ses
+  features sur le mécanisme simulé, pas une performance absolue en banque.
 - Le seuil de production est recalculé sur la période de test uniquement ;
   en usage réel il faudrait le réviser périodiquement à mesure que le volume
   de transactions et le taux de blanchiment évoluent.

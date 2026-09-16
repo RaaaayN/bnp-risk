@@ -15,7 +15,6 @@ def client(tmp_path, monkeypatch):
     n = 60
     rng = np.random.default_rng(0)
     df = pd.DataFrame({c: rng.random(n) for c in FEATURE_COLUMNS})
-    df["payment_format_code"] = rng.integers(0, 5, n)
     df["Timestamp"] = pd.date_range("2024-01-01", periods=n, freq="h")
     df["Transaction Id"] = [f"TXN{i}" for i in range(n)]
     df["Account"] = rng.integers(1, 5, n)
