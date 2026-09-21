@@ -147,6 +147,39 @@ jamais pré-rempli par le LLM — impossible de valider une décision sans au
 moins 10 caractères de justification humaine (`DecisionRequest` dans
 `schemas.py`).
 
+### 2.5 bis Séparer l'orientation de la narration : Jev
+
+Faire produire au même LLM une explication et une décision structurée mélange
+deux métiers. Le texte est de la génération ; « Clear / Investigate / Escalate
+avec une confiance » est une classification typée. Le premier reste au LLM. Le
+second va à [`jev_decision.py`](../src/riskops/jev_decision.py), qui appelle Jev
+(TypeSafe, SDK officiel) : une seule requête, quatre questions évaluées
+indépendamment (choix de l'action, priorité, besoin de revue humaine, cohérence
+du schéma), et un `DecisionSupport` typé en retour.
+
+Garde-fous : timeout court et un seul retry (l'UI attend l'appel) ; toute
+erreur (réseau, authentification, réponse invalide, action hors énumération)
+retombe sur des règles déterministes (`score ≥ max(seuil, 0.85)` → Escalate,
+`≥ seuil` → Investigate) avec la source `fallback` ; en fallback les
+probabilités restent `None` au lieu d'être inventées ; la provenance (`jev` /
+`fallback`) est fixée par le code, jamais par un modèle. Les tests font tourner
+le vrai SDK contre un transport HTTP simulé, sans jamais joindre le service.
+
+Le côté narration supporte deux fournisseurs, choisis selon la clé disponible
+(Claude prioritaire, sinon Gemini, sinon fallback SHAP), avec sortie structurée
+et validation Pydantic dans les deux cas.
+
+**Ce que ça ne prouve pas.** Sur 177 alertes (40 positifs), Jev classe
+légèrement moins bien que le score brut (ROC-AUC 0.687 contre 0.703 dans la
+file) et s'accorde avec la règle de seuil dans 93 % des cas, car il ne reçoit
+que le score, le seuil et les facteurs SHAP. Sa probabilité de revue humaine ne
+sépare pas vrais et faux positifs. Le bénéfice défendable est la séparation
+des rôles, l'incertitude affichée par action et l'audit du désaccord
+analyste/IA (`human_overrode_recommendation`), pas un gain de détection ni de
+latence (environ 0,6 s de plus par alerte). Mesure faite dans un environnement
+local aux versions non épinglées : à refaire dans l'environnement de la CI avant
+de la citer comme référence.
+
 ### 2.6 Journal d'audit : SQLite, pas de service externe
 
 Le besoin est la traçabilité (modèle, seuil, score, données vues, décision
@@ -159,6 +192,13 @@ justification non vide ou avec une valeur de décision hors de l'énumération
 `{Clear, Investigate, Escalate}` — la contrainte de contrôle est appliquée au
 niveau code *et* au niveau des types (Pydantic `Literal` dans
 `DecisionRequest`), pas seulement dans l'UI.
+
+Le journal enregistre aussi l'aide à la décision vue par l'analyste
+(`decision_support_json`, sa source `jev`/`fallback`) et un indicateur
+`human_overrode_recommendation` (0 si l'analyste a suivi l'orientation, 1 s'il
+l'a contredite). Les bases existantes sont migrées par `ALTER TABLE`. Ce champ
+permet de mesurer plus tard le taux de désaccord, par exemple selon la
+confiance affichée.
 
 ### 2.7 Seuil piloté par la capacité opérationnelle, pas par un optimum statistique
 
@@ -217,6 +257,9 @@ Le README le mentionne déjà brièvement ; voici le raisonnement complet.
   sur le test. En usage réel il faudrait le réviser périodiquement sur une
   fenêtre de calibration arrivée à maturité, jamais sur la période servant au
   reporting final.
+- Jev n'est utile ici que pour l'architecture et la traçabilité tant qu'il ne
+  reçoit pas les signaux bruts du compte ; sa valeur prédictive n'est pas
+  démontrée (voir §2.5 bis).
 - La synthèse LLM, même contrainte par schéma, reste un résumé et non une
   preuve : elle est explicitement positionnée comme aide à la lecture, jamais
   comme justification suffisante d'une décision (voir §2.5).

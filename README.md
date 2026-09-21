@@ -10,9 +10,10 @@ fait monter le score, puis garder une trace de sa décision.
 Ce dépôt couvre cette chaîne de bout en bout. Il génère des transactions,
 construit des variables causales, compare une régression logistique à XGBoost,
 calibre un seuil selon une capacité d'investigation, expose les alertes dans
-une API et une petite interface, puis journalise la décision humaine. La
-synthèse LLM reste une aide à la lecture : elle peut suggérer une orientation,
-mais elle ne valide ni ne bloque une transaction.
+une API et une petite interface, puis journalise la décision humaine. Deux
+couches d'IA restent des aides, jamais des décideurs : Jev propose une
+orientation avec des probabilités, un LLM rédige une narration, et aucune des
+deux ne valide ni ne bloque une transaction.
 
 Je préfère être clair dès le départ : les données sont synthétiques. Ce projet
 montre une méthode et une architecture de démonstration, pas la performance
@@ -30,9 +31,15 @@ compte et ses principaux facteurs SHAP.
 
 ![Vue d'ensemble de l'UI analyste : file d'alertes, score, facteurs SHAP et décision](docs/screenshots/ui_overview.png)
 
-Plus bas, une synthèse reformule ces facteurs en langage courant. Sa provenance
-(`llm` ou `fallback`) est affichée et conservée dans l'audit. La décision reste
-celle de l'analyste, avec une justification obligatoire.
+Plus bas, deux blocs distincts. L'**aide à la décision** (Jev) affiche une
+orientation non contraignante, sa priorité et, quand Jev répond, les
+probabilités par action. La **narration** (LLM) reformule les facteurs en
+langage courant. La provenance de chacun (`jev`/`llm` ou `fallback`) est
+affichée et conservée dans l'audit. La décision reste celle de l'analyste, avec
+une justification obligatoire.
+
+> Les captures ci-dessous datent d'avant la séparation aide à la décision /
+> narration : elles montrent l'ancienne synthèse unique.
 
 ![Synthèse LLM d'investigation et journal d'audit](docs/screenshots/ui_llm_synthesis.png)
 
@@ -91,6 +98,19 @@ humaine viennent de Jev (SDK officiel `typesafe-sdk`) quand
 `TYPESAFE_API_KEY` est défini, sinon de règles
 déterministes sur le score. Dans tous les cas l'analyste décide.
 
+## Configuration
+
+Aucune clé n'est obligatoire : sans elles, tout fonctionne en mode dégradé
+déterministe. Les variables se placent dans l'environnement du processus ; un
+fichier `.env` à la racine (ignoré par git) est lu par `docker compose`, mais
+**pas** par un lancement local d'`uvicorn`, où il faut les exporter.
+
+| Variable | Rôle | Sans elle |
+|---|---|---|
+| `TYPESAFE_API_KEY` | Aide à la décision via Jev ([console.typesafe.ai](https://console.typesafe.ai/)) | Règles déterministes sur le score |
+| `ANTHROPIC_API_KEY` | Narration via Claude (prioritaire) | Essaie Gemini, sinon narration déterministe |
+| `GEMINI_API_KEY` | Narration via Gemini si Claude n'est pas configuré | Narration déterministe |
+
 ## Tests
 
 ```bash
@@ -100,7 +120,9 @@ pytest -v
 
 La suite couvre notamment le signal du générateur, la causalité des fenêtres
 temporelles, les métriques à seuil figé, l'audit SQLite, les endpoints API et
-le fallback LLM. La CI relance aussi tout l'entraînement et vérifie que les
+les fournisseurs Jev et LLM (le vrai SDK Jev est exercé contre un transport HTTP
+simulé : succès, 401, 500, réponse invalide, coupure réseau) et leurs fallbacks.
+Aucun test n'appelle un service réel, même si des clés sont exportées. La CI relance aussi tout l'entraînement et vérifie que les
 métriques publiées restent reproductibles.
 
 ## Les choix qui comptent vraiment
@@ -189,6 +211,51 @@ Ce tableau sert à montrer le compromis. Il ne permet pas de conclure qu'une
 équipe réelle devrait traiter 20 dossiers par jour, ni que les mêmes seuils
 fonctionneraient sur une autre population.
 
+## Aide à la décision avec Jev : ce que ça apporte, et ce que ça n'apporte pas
+
+Jusqu'ici le LLM faisait deux métiers : rédiger une explication et choisir
+Clear / Investigate / Escalate avec un niveau de confiance. Le second est une
+petite décision typée, pas de la génération de texte. Les rôles sont maintenant
+séparés :
+
+```
+XGBoost prédit → SHAP explique → Jev oriente → le LLM raconte → l'analyste décide
+```
+
+[`jev_decision.py`](src/riskops/jev_decision.py) pose quatre questions à Jev
+([TypeSafe](https://docs.typesafe.ai/), SDK officiel `typesafe-sdk`) en un seul
+appel : l'action recommandée (probabilités par option), une priorité sur cinq
+niveaux ramenée à 0-10, la probabilité qu'une revue humaine soit indispensable
+et la cohérence du schéma de signaux. Le LLM n'émet plus ni action ni confiance.
+Si Jev est absent ou en échec (timeout de 10 s, un retry), des règles
+déterministes prennent le relais et la source `fallback` est tracée ; dans ce
+mode les probabilités restent vides plutôt que fabriquées.
+
+**Mesuré, sans embellir.** Sur les 177 alertes de la file de test locale (40 vrais
+positifs), Jev n'améliore pas la détection :
+
+| | Score XGBoost | Jev P(Escalate) | Jev priorité |
+|---|---|---|---|
+| ROC-AUC dans la file | 0.703 | 0.687 | 0.677 |
+| PR-AUC dans la file | 0.545 | 0.503 | 0.412 |
+
+Escalades : 105 avec la règle `score ≥ 0.85` (précision 0.29, 30/40 vrais
+positifs captés) contre 113 avec Jev (précision 0.27, 30/40). Les deux sont
+d'accord dans 93 % des cas, et la probabilité de revue humaine ne discrimine pas
+(0.52 sur les vrais positifs, 0.57 sur les faux). Jev ne reçoit aujourd'hui que le
+score, le seuil, les facteurs SHAP et la taille de l'historique : il reproduit
+donc surtout le score. Il ajoute environ 0,6 s par alerte ; côté narration, Gemini
+prend 7 à 11 s.
+
+L'intérêt est **architectural** : rôles séparés, probabilités par action
+affichées, et un audit qui enregistre la source de chaque aide et si l'analyste
+s'en est écarté (`human_overrode_recommendation`), ce qui permettra de mesurer
+les désaccords. Ce n'est pas un gain de performance ni de vitesse. Ces chiffres
+viennent d'un environnement local dont les versions (numpy, xgboost, shap)
+diffèrent de `requirements.txt` ; ils sont indicatifs, pas des métriques de
+référence. Piste pour un vrai gain : fournir à Jev les signaux bruts (montant
+relatif à l'habituel, contreparties distinctes, délai) plutôt que le seul score.
+
 ## Comment les pièces s'enchaînent
 
 ```
@@ -204,8 +271,11 @@ data_gen.py → features.py → train.py (LogReg + XGBoost + SHAP)
                        ▼                    │
                 app_streamlit.py (UI analyste)
                        │
-                       ▼
-              llm_summary.py (synthèse Claude, schéma Pydantic)
+          ┌────────────┴─────────────┐
+          ▼                          ▼
+ jev_decision.py              llm_summary.py
+ (orientation typée,          (narration Claude/Gemini,
+  fallback règles)             fallback SHAP)
 ```
 
 ## Ce que ce projet ne prouve pas
@@ -221,5 +291,10 @@ data_gen.py → features.py → train.py (LogReg + XGBoost + SHAP)
   faudrait le suivre dans le temps avec le volume d'alertes, le drift et le
   retour des analystes.
 - L'API de démonstration n'a pas d'authentification ni de gestion des rôles.
-- Une synthèse LLM peut être maladroite ou fausse. Sa source est visible et
+- Une narration LLM peut être maladroite ou fausse. Sa source est visible et
   auditée ; la décision et sa justification restent humaines.
+- Jev n'a pas été montré meilleur que la règle de seuil (voir plus haut) : ses
+  probabilités affichent une incertitude, elles ne prouvent pas une meilleure
+  détection. Une orientation Jev est une aide, jamais une décision.
+- Le champ `llm_synthesis` de `/alerts/{id}` est devenu `narrative`, et
+  `decision_support` a été ajouté : changement d'API pour d'éventuels clients.
