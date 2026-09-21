@@ -81,8 +81,9 @@ La même chose avec Docker :
 docker compose up --build
 ```
 
-Sans `ANTHROPIC_API_KEY`, l'application utilise un résumé déterministe construit
-à partir des facteurs SHAP. Avec une clé, elle appelle Claude. Dans les deux
+Sans clé LLM, l'application utilise un résumé déterministe construit
+à partir des facteurs SHAP. Avec `ANTHROPIC_API_KEY`, elle appelle Claude ; à défaut, avec
+`GEMINI_API_KEY`, elle appelle Gemini (Claude a la priorité si les deux sont définies). Dans les deux
 cas, le schéma de sortie est le même et la provenance est enregistrée.
 
 L'orientation Clear / Investigate / Escalate, la priorité et la probabilité de revue
