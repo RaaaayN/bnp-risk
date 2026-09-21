@@ -59,3 +59,18 @@ def test_synthesis_source_is_persisted(conn):
 
 def test_all_decisions_are_valid_enum_values():
     assert VALID_DECISIONS == {"Clear", "Investigate", "Escalate"}
+
+
+def test_override_of_recommendation_is_recorded(conn):
+    support = {"recommended_action": "Escalate", "decision_source": "fallback"}
+    for txn, decision in (("T1", "Escalate"), ("T2", "Clear")):
+        record_decision(
+            conn, transaction_id=txn, model_name="xgboost", model_version="v1",
+            threshold=0.5, score=0.9, features={}, shap_top_factors=[],
+            decision=decision, justification="Justification suffisante",
+            decision_by="analyst", decision_support=support,
+        )
+    rows = {r["transaction_id"]: r for r in list_decisions(conn)}
+    assert rows["T1"]["human_overrode_recommendation"] == 0
+    assert rows["T2"]["human_overrode_recommendation"] == 1
+    assert rows["T2"]["decision_support_source"] == "fallback"

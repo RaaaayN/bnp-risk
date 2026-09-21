@@ -33,18 +33,30 @@ class AlertDetail(AlertSummary):
     top_factors: list[RiskFactor]
     account_history: list[AccountHistoryItem]
     suspicious_counterparties: list[int]
-    llm_synthesis: Optional["LLMSynthesis"] = None
+    decision_support: Optional["DecisionSupport"] = None
+    narrative: Optional["NarrativeSynthesis"] = None
 
 
-class LLMSynthesis(BaseModel):
-    """Sortie structuree attendue du LLM: force un format exploitable par
-    l'analyste plutot qu'un texte libre non verifiable."""
+class NarrativeSynthesis(BaseModel):
+    """Sortie structuree du LLM: narration uniquement. L'orientation et la
+    confiance relevent de DecisionSupport, jamais du LLM."""
     summary: str = Field(description="Resume en 2-3 phrases de la situation")
     key_red_flags: list[str] = Field(description="Liste des signaux d'alerte identifies")
     risk_narrative: str = Field(description="Explication du raisonnement de risque")
-    recommended_action: Literal["Clear", "Investigate", "Escalate"]
-    confidence: Literal["low", "medium", "high"]
     synthesis_source: Literal["llm", "fallback"]
+
+
+class DecisionSupport(BaseModel):
+    """Aide a la decision typee (couche Jev, ou fallback deterministe).
+    Les probabilites, la revue humaine et la latence sont None en fallback: on
+    n'affiche pas de probabilite qu'aucun modele n'a produite."""
+    recommended_action: Literal["Clear", "Investigate", "Escalate"]
+    action_probabilities: Optional[dict[str, float]] = None
+    priority_score: float = Field(ge=0, le=10)
+    review_probability: Optional[float] = Field(default=None, ge=0, le=1)
+    pattern_consistency_probability: Optional[float] = Field(default=None, ge=0, le=1)
+    decision_source: Literal["jev", "fallback"]
+    latency_ms: Optional[float] = None
 
 
 class DecisionRequest(BaseModel):

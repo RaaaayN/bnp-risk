@@ -20,6 +20,9 @@ CREATE TABLE IF NOT EXISTS audit_log (
     shap_top_factors_json TEXT NOT NULL,
     llm_summary_json TEXT,
     synthesis_source TEXT CHECK(synthesis_source IN ('llm', 'fallback') OR synthesis_source IS NULL),
+    decision_support_json TEXT,
+    decision_support_source TEXT CHECK(decision_support_source IN ('jev', 'fallback') OR decision_support_source IS NULL),
+    human_overrode_recommendation INTEGER,
     decision TEXT NOT NULL,
     justification TEXT NOT NULL,
     decision_by TEXT NOT NULL,
@@ -37,6 +40,13 @@ def get_connection(db_path: pathlib.Path = DB_PATH) -> sqlite3.Connection:
     columns = {row[1] for row in conn.execute("PRAGMA table_info(audit_log)")}
     if "synthesis_source" not in columns:
         conn.execute("ALTER TABLE audit_log ADD COLUMN synthesis_source TEXT")
+    for name, ddl in (
+        ("decision_support_json", "TEXT"),
+        ("decision_support_source", "TEXT"),
+        ("human_overrode_recommendation", "INTEGER"),
+    ):
+        if name not in columns:
+            conn.execute(f"ALTER TABLE audit_log ADD COLUMN {name} {ddl}")
     return conn
 
 
@@ -53,24 +63,31 @@ def record_decision(
     justification: str,
     decision_by: str,
     llm_summary: dict | None = None,
+    decision_support: dict | None = None,
 ) -> int:
     if decision not in VALID_DECISIONS:
         raise ValueError(f"Decision invalide: {decision}. Attendu: {VALID_DECISIONS}")
     if not justification or not justification.strip():
         raise ValueError("La justification est obligatoire pour toute decision.")
     synthesis_source = llm_summary.get("synthesis_source") if llm_summary else None
+    support_source = decision_support.get("decision_source") if decision_support else None
+    recommended = decision_support.get("recommended_action") if decision_support else None
+    overrode = None if recommended is None else int(recommended != decision)
 
     cur = conn.execute(
         """INSERT INTO audit_log
         (transaction_id, model_name, model_version, threshold, score, features_json,
-         shap_top_factors_json, llm_summary_json, synthesis_source, decision, justification,
+         shap_top_factors_json, llm_summary_json, synthesis_source, decision_support_json,
+         decision_support_source, human_overrode_recommendation, decision, justification,
          decision_by, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             transaction_id, model_name, model_version, threshold, score,
             json.dumps(features), json.dumps(shap_top_factors),
             json.dumps(llm_summary) if llm_summary else None,
             synthesis_source,
+            json.dumps(decision_support) if decision_support else None,
+            support_source, overrode,
             decision, justification.strip(), decision_by,
             datetime.datetime.now(datetime.UTC).isoformat(),
         ),

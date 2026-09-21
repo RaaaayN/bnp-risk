@@ -127,13 +127,15 @@ structurée (impossible à valider ou à afficher de façon fiable dans l'UI).
 [`llm_summary.py`](../src/riskops/llm_summary.py) et
 [`schemas.py`](../src/riskops/schemas.py) par quatre garde-fous.
 
-Le schéma Pydantic est forcé (`LLMSynthesis`) : le prompt système exige un
+Le schéma Pydantic est forcé (`NarrativeSynthesis`) : le prompt système exige un
 JSON conforme, et toute sortie qui ne valide pas est rejetée
 (`ValidationError` → fallback) plutôt qu'affichée telle quelle. On ne fait
 jamais confiance à du texte libre. Le contexte donné au LLM se limite aux
 facteurs SHAP déjà calculés, jamais la transaction brute. Il reformule une
-explication déjà produite statistiquement et propose un `recommended_action`
-explicitement présenté comme une orientation non contraignante. Sans clé API,
+explication déjà produite statistiquement, sans recommander d'action ni exprimer
+de confiance : l'orientation (`recommended_action`, non contraignante) vient de
+[`jev_decision.py`](../src/riskops/jev_decision.py) (`DecisionSupport`), et
+l'audit trace si l'analyste s'en est écarté. Sans clé API,
 un fallback déterministe prend
 le relais : mêmes endpoints, même schéma de sortie, une synthèse construite
 directement à partir des facteurs SHAP. Ce n'est pas qu'une commodité de

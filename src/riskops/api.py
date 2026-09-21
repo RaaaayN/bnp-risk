@@ -11,6 +11,7 @@ from fastapi import FastAPI, HTTPException
 
 from riskops.audit import get_connection, list_decisions, record_decision
 from riskops.features import FEATURE_COLUMNS
+from riskops.jev_decision import get_decision_support
 from riskops.llm_summary import generate_synthesis
 from riskops.schemas import (
     AccountHistoryItem,
@@ -80,7 +81,7 @@ def load_artifacts():
     _state.update(
         model=model, explainer=explainer, df=test_df, shap_values=shap_values,
         threshold=threshold, conn=get_connection(AUDIT_DB_PATH), model_name=model_name,
-        syntheses={},
+        syntheses={}, supports={},
     )
 
 
@@ -154,11 +155,14 @@ def get_alert_detail(transaction_id: str, with_llm: bool = True):
     if with_llm:
         context = {
             "transaction_id": detail.transaction_id, "score": detail.score,
+            "threshold": detail.threshold,
             "top_factors": [f.model_dump() for f in top_factors],
             "account_history_count": len(history),
         }
-        detail.llm_synthesis = generate_synthesis(context)
-        _state["syntheses"][transaction_id] = detail.llm_synthesis.model_dump()
+        detail.decision_support = get_decision_support(context)
+        detail.narrative = generate_synthesis(context)
+        _state["syntheses"][transaction_id] = detail.narrative.model_dump()
+        _state["supports"][transaction_id] = detail.decision_support.model_dump()
 
     return detail
 
@@ -180,6 +184,7 @@ def post_decision(transaction_id: str, decision_req: DecisionRequest):
         decision=decision_req.decision, justification=decision_req.justification,
         decision_by=decision_req.decision_by,
         llm_summary=_state["syntheses"].get(transaction_id),
+        decision_support=_state["supports"].get(transaction_id),
     )
     saved = _state["conn"].execute("SELECT * FROM audit_log WHERE id = ?", (decision_id,)).fetchone()
     return DecisionResponse(

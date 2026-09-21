@@ -52,16 +52,23 @@ with col1:
     st.markdown("**Contreparties suspectes liees**")
     st.write(detail["suspicious_counterparties"] or "Aucune")
 
-    if detail.get("llm_synthesis"):
-        st.markdown("**Synthese d'investigation (LLM)**")
-        s = detail["llm_synthesis"]
-        st.info(s["summary"])
-        st.write("Signaux d'alerte:", ", ".join(s["key_red_flags"]))
-        st.write(s["risk_narrative"])
-        st.caption(
-            f"Orientation non contraignante: {s['recommended_action']} "
-            f"(confiance: {s['confidence']}, source: {s['synthesis_source']})"
-        )
+    if detail.get("decision_support"):
+        st.markdown("**Aide a la decision**")
+        d = detail["decision_support"]
+        st.write(f"Orientation non contraignante: **{d['recommended_action']}** "
+                 f"(priorite {d['priority_score']}/10, source: {d['decision_source']})")
+        if d.get("action_probabilities"):
+            st.bar_chart(d["action_probabilities"])
+        if d.get("review_probability") is not None:
+            st.caption(f"Probabilite de revue humaine requise: {d['review_probability']:.0%}")
+
+    if detail.get("narrative"):
+        st.markdown("**Narration d'investigation (LLM)**")
+        n = detail["narrative"]
+        st.info(n["summary"])
+        st.write("Signaux d'alerte:", ", ".join(n["key_red_flags"]))
+        st.write(n["risk_narrative"])
+        st.caption(f"source: {n['synthesis_source']}")
 
 with col2:
     st.subheader("Decision analyste")

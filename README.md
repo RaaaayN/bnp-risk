@@ -85,6 +85,11 @@ Sans `ANTHROPIC_API_KEY`, l'application utilise un résumé déterministe constr
 à partir des facteurs SHAP. Avec une clé, elle appelle Claude. Dans les deux
 cas, le schéma de sortie est le même et la provenance est enregistrée.
 
+L'orientation Clear / Investigate / Escalate, la priorité et la probabilité de revue
+humaine viennent de Jev (SDK officiel `typesafe-sdk`) quand
+`TYPESAFE_API_KEY` est défini, sinon de règles
+déterministes sur le score. Dans tous les cas l'analyste décide.
+
 ## Tests
 
 ```bash

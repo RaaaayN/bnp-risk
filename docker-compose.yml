@@ -6,6 +6,7 @@ services:
       - "8000:8000"
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - TYPESAFE_API_KEY=${TYPESAFE_API_KEY:-}
     volumes:
       - ./data:/app/data
       - ./models:/app/models

@@ -62,7 +62,8 @@ def test_get_alert_detail_has_shap_and_history(client):
     txn_id = alerts[0]["transaction_id"]
     detail = client.get(f"/alerts/{txn_id}").json()
     assert detail["top_factors"]
-    assert "llm_synthesis" in detail
+    assert "narrative" in detail
+    assert detail["decision_support"]["decision_source"] == "fallback"
 
 
 def test_decision_requires_justification(client):
@@ -85,6 +86,8 @@ def test_decision_is_persisted_in_audit_log(client):
     assert any(a["transaction_id"] == txn_id and a["decision"] == "Escalate" for a in audit)
     saved = next(a for a in audit if a["transaction_id"] == txn_id)
     assert saved["synthesis_source"] == "fallback"
+    assert saved["decision_support_source"] == "fallback"
+    assert saved["human_overrode_recommendation"] in (0, 1)
 
 
 def test_unknown_transaction_returns_404(client):
